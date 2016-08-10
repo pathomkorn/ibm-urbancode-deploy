@@ -1,0 +1,182 @@
+heat_template_version: 2013-05-23
+
+description: >
+  Created 8/8/16 by finuser. For Cloud fin@icm
+
+parameters:
+  hostname:
+    type: string
+  flavor:
+    type: string
+    default: 'm1.small'
+  key_name:
+    type: string
+    default: '370b27fd-5787-457f-b0ff-69b00c5ff8a0'
+  ucd_server_url:
+    type: string
+    default: 'https://ucd.ibmcloud.com:8443'
+  ucd_user:
+    type: string
+    description: 'The user credential for the UrbanCode Deploy server.'
+    default: 'admin'
+  ucd_password:
+    type: string
+    description: 'The user credential for the UrbanCode Deploy server.'
+    hidden: true
+    default: '${PASSWORD}'
+  ucd_relay_url:
+    type: string
+    hidden: true
+    default: 'None'
+  private_network:
+    type: string
+    default: 'b6e29d9f-dfea-44c9-aa93-ce3edeb5c902'
+  private_subnet:
+    type: string
+    default: '370b27fd-5787-457f-b0ff-69b00c5ff8a0'
+  public_network:
+    type: string
+    default: '9e64ccad-b556-4b6f-90ff-82c2c1cfc9eb'
+
+parameter_groups:
+    - { label: 'Access & Security Parameters', parameters: [key_name] }
+    - { label: 'Agent Parameters', parameters: [ucd_password, ucd_relay_url, ucd_server_url, ucd_user] }
+    - { label: 'Instance Parameters', parameters: [flavor, hostname] }
+    - { label: 'Network Parameters', parameters: [private_network, private_subnet, public_network] }
+
+resources:
+## REFERENCE {"fin_router_main":{"type": "OS::Neutron::Router", "properties": {"router_id": "6b507ce1-f4c7-4018-baf4-62604ba856d6", "interfaces":[{"network_id":"9ba6e5b1-a928-46c4-a63e-d916120b04aa","subnet_id":"c38359e4-37c2-4d77-84cc-57a5caebf7a2","external":"false"},{"network_id":"c10e6a2e-9904-4eda-82ae-ac316d38ec97","subnet_id":"033170ba-84ac-4d3b-9890-6edf73bdc09b","external":"false"},{"network_id":"e0e338b4-b652-43f3-af8c-b89d30683b06","subnet_id":"e7d41943-0db8-4323-8dea-2129ac758119","external":"false"},{"network_id":"b6e29d9f-dfea-44c9-aa93-ce3edeb5c902","subnet_id":"370b27fd-5787-457f-b0ff-69b00c5ff8a0","external":"false"}]}}}
+
+## REFERENCE {"fin_net_sit":{"type": "OS::Neutron::Net", "properties": {"network_id": "b6e29d9f-dfea-44c9-aa93-ce3edeb5c902", "external":"false", "subnets": [{"id":"370b27fd-5787-457f-b0ff-69b00c5ff8a0","name":"fin_subnet_sit","cidr":"192.168.144.0\/24"}] }}}
+
+  webserver1:
+    type: OS::Nova::Server
+    properties:
+      networks:
+          - port: { get_resource: webserver1_port  }
+      user_data: {get_resource: webserver1_mime}
+      user_data_format: RAW
+      name: { get_param: hostname }
+      image: "791b536c-55ee-4b61-837d-cdf3ef24b3e2"
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      availability_zone: "nova"
+      metadata: 
+        "__os_type__" : "Linux"
+
+  webserver1_floating-ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network_id: { get_param: public_network }
+      port_id: { get_resource: webserver1_port }
+
+  webserver1_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: private_network }
+      replacement_policy: AUTO   #TODO remove this if using HEAT version Icehouse!
+      fixed_ips:
+        - subnet: { get_param: private_subnet }
+
+  webserver1_content:
+    depends_on: webserver1_httpd
+    type: IBM::UrbanCode::SoftwareDeploy::UCD
+    properties:
+      apply_config: { get_resource: webserver1_content_config }
+      server: webserver1
+      version: '2.0'
+      agent_timeout: "360"
+
+  webserver1_content_config:
+    type: IBM::UrbanCode::SoftwareConfig::UCD
+    properties: 
+      name: "fin-web"
+      component_process: 'Deploy web content'
+      component_process_timeout: "300"
+      ucd_server_url: { get_param: ucd_server_url }
+      ucd_username: { get_param: ucd_user }
+      ucd_password: { get_param: ucd_password }
+      application: { get_attr: [resource_tree, application_name] }
+      environment_name: { get_attr: [resource_tree, environment_name] }
+
+  webserver1_mime:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+        - config: { get_resource: ucd_agent_install_linux }
+          subtype: "x-shellscript"
+
+  webserver1_httpd:
+    type: IBM::UrbanCode::SoftwareDeploy::UCD
+    properties:
+      apply_config: { get_resource: webserver1_httpd_config }
+      server: webserver1
+      version: '2.0'
+      agent_timeout: "360"
+
+  webserver1_httpd_config:
+    type: IBM::UrbanCode::SoftwareConfig::UCD
+    properties: 
+      name: "fin-web"
+      component_process: 'Deploy web server'
+      component_process_timeout: "300"
+      ucd_server_url: { get_param: ucd_server_url }
+      ucd_username: { get_param: ucd_user }
+      ucd_password: { get_param: ucd_password }
+      application: { get_attr: [resource_tree, application_name] }
+      environment_name: { get_attr: [resource_tree, environment_name] }
+
+  resource_tree:
+    type: IBM::UrbanCode::ResourceTree
+    properties:
+       urbancode_deploy_url: { get_param: ucd_server_url }
+       username: { get_param: ucd_user }
+       password: { get_param: ucd_password }
+       team_mappings: 
+       application: fin_web
+       base_resource_group: fin_web_sit
+
+  ucd_agent_install_linux:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      config:
+        str_replace:
+          template: |
+            #!/usr/bin/env bash
+            #ifconfig eth0 mtu 1454 ## Optionally patch the MTU
+            arch=`uname -ms | awk '{print tolower($0)}' | tr " " "-" `
+            agent_archive=ibm-ucd-agent-$arch.tgz
+            if [ "_ucd_relay_url_" != "None" ]; then
+              proxy_args="--proxy _ucd_relay_url_:20080"
+              ucd_remote_host=_ucd_relay_url_
+              agent_args="-r -d"
+            else
+              proxy_args=
+              agent_args=
+              ucd_remote_host=_ucd_server_url_
+            fi
+            if command -V apt-get && ! command -V curl; then apt-get -y install curl; fi
+            if command -V yum && ! command -V curl; then yum -y install curl; fi
+            curl $proxy_args -Lk --retry 10 --retry-delay 10 --retry-max-time 120 -o /tmp/$agent_archive -u _ucd_user_:_ucd_password_ "_ucd_server_url_/cli/version/downloadArtifacts?component=ucd-agent-$arch&version=_agent_version_&singleFilePath=$agent_archive"
+            echo curl $proxy_args -Lk --retry 10 --retry-delay 10 --retry-max-time 120 -o /tmp/$agent_archive -u _ucd_user_:_ucd_password_ \"_ucd_server_url_/cli/version/downloadArtifacts?component=ucd-agent-$arch&version=_agent_version_&singleFilePath=$agent_archive\"
+            tar xfz /tmp/$agent_archive -C /tmp
+            /tmp/ibm-ucd-agent-install/install-agent-with-options.sh -t "_agent_team_" -s $ucd_remote_host $agent_args -x start -v -n _agent_name_
+          params:
+            _agent_name_:
+               str_replace:
+                  template: |
+                    "_application_name_._environment_name_"
+                  params:
+                    _application_name_: { get_attr: [resource_tree, application_name ] }
+                    _environment_name_: { get_param: "OS::stack_name" }
+            _ucd_server_url_: { get_param: ucd_server_url }
+            _ucd_relay_url_: { get_param: ucd_relay_url }
+            _ucd_user_ : { get_param: ucd_user }
+            _ucd_password_ : { get_param: ucd_password }
+            _agent_version_ : 7.1
+            _agent_team_ : ""
+
+outputs:
+  blueprint_url:
+    description: Blueprint Origin URL
+    value:  https://ucd.ibmcloud.com:8444/landscaper/view/projects?open=finuser_d1b354c9_902a_4752_a85b_13b30bd5b771-OrionContent/fin/fin_web_sit/fin_web_sit.yml
